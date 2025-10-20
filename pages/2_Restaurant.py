@@ -32,7 +32,7 @@ if "auth_user" not in ss:
         rec = verify_login(u, p)
         if rec:
             ss.auth_user = rec
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error(t("Credenciales inválidas","Invalid credentials"))
     st.stop()
@@ -54,7 +54,7 @@ with col1:
         if st.form_submit_button(t("Agregar","Add")):
             if name.strip():
                 add_menu_item(name, desc, price, cfg.get("currency","USD"), notes)
-                st.success("OK"); st.experimental_rerun()
+                st.success("OK"); st.rerun()
             else:
                 st.error(t("El nombre es obligatorio","Name is required"))
 
@@ -75,7 +75,7 @@ with col2:
                     notes = (r.get("special_notes","") or "").strip()
                     add_menu_item(nm, desc, price, cfg.get("currency","USD"), notes)
                     added += 1
-            st.success(t(f"Agregados: {added}","Added: ") + str(added)); st.experimental_rerun()
+            st.success(t(f"Agregados: {added}","Added: ") + str(added)); st.rerun()
         except Exception as e:
             st.error(t("No se pudo procesar el archivo","Failed to process file") + f": {e}")
 
@@ -83,7 +83,7 @@ with col2:
     img_up = st.file_uploader(t("Subir imagen del menú","Upload menu image"), type=["png","jpg","jpeg"], key="menu_img")
     if st.button(t("Guardar imagen","Save image")) and img_up:
         add_menu_image(img_up)
-        st.success("OK"); st.experimental_rerun()
+        st.success("OK"); st.rerun()
 
 st.write("---")
 view = st.radio(t("Visualización del menú","Menu view"), [t("Tabla","Table"), t("Imágenes","Images")], horizontal=True, key="menu_view_admin")
@@ -124,7 +124,7 @@ with c1:
             oid = st.selectbox(t("Orden","Order"), [o["id"] for o in orders])
             newst = st.selectbox(t("Nuevo estado","New status"), ["confirmed","preparing","ready","delivered"])
             if st.button(t("Aplicar","Apply")) and oid:
-                update_order_status(oid, newst); st.success("OK"); st.experimental_rerun()
+                update_order_status(oid, newst); st.success("OK"); st.rerun()
 
         st.download_button(label=t("⬇️ Descargar órdenes (CSV)","⬇️ Download orders (CSV)"),
                            data=export_orders_csv(), file_name="orders.csv", mime="text/csv")
@@ -142,16 +142,16 @@ with c2:
             with colA:
                 if st.button(t("Aprobar","Approve"), key="ap_"+p["id"]):
                     answer_pending_question(p["id"], "approved", t("Aprobado por cocina.","Approved by kitchen."))
-                    st.success("OK"); st.experimental_rerun()
+                    st.success("OK"); st.rerun()
             with colB:
                 if st.button(t("Negar","Deny"), key="dn_"+p["id"]):
                     answer_pending_question(p["id"], "denied", t("No disponible.","Not available."))
-                    st.success("OK"); st.experimental_rerun()
+                    st.success("OK"); st.rerun()
             with colC:
                 msg = st.text_input(t("Mensaje al cliente (opcional)","Message to client (optional)"), key="msg_"+p["id"])
                 if st.button(t("Responder con mensaje","Reply with message"), key="rm_"+p["id"]):
                     answer_pending_question(p["id"], "custom", msg or t("Aprobado.","Approved."))
-                    st.success("OK"); st.experimental_rerun()
+                    st.success("OK"); st.rerun()
 
         st.download_button(label=t("⬇️ Descargar interacciones (CSV)","⬇️ Download pendings (CSV)"),
                            data=export_pendings_csv(), file_name="pendings.csv", mime="text/csv")

@@ -20,7 +20,7 @@ if "admin_auth" not in ss:
             rec = verify_login(u, p)
             if rec and rec.get("role") == "admin":
                 ss.admin_auth = rec
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("Credenciales inválidas o sin rol admin.")
     if "admin_auth" not in ss:
@@ -65,7 +65,7 @@ with st.form("new_tenant"):
     slug = st.text_input("Slug")
     if st.form_submit_button("Crear tenant"):
         if name and slug:
-            create_tenant(name, slug); st.success("Tenant creado."); st.experimental_rerun()
+            create_tenant(name, slug); st.success("Tenant creado."); st.rerun()
         else:
             st.error("Ingresa nombre y slug.")
 with st.form("new_user"):
@@ -77,7 +77,7 @@ with st.form("new_user"):
     if st.form_submit_button("Crear usuario"):
         if tsel and username and password:
             tid = int(tsel.split(" — ")[0])
-            create_user(tid, username, password, role); st.success("Usuario creado."); st.experimental_rerun()
+            create_user(tid, username, password, role); st.success("Usuario creado."); st.rerun()
         else:
             st.error("Completa todos los campos.")
 
@@ -94,13 +94,13 @@ with st.form("new_faq"):
     if st.form_submit_button("Agregar"):
         if pattern and answer:
             add_faq(ss.admin_auth["tenant_id"], lang, pattern, answer)
-            st.success("FAQ agregada."); st.experimental_rerun()
+            st.success("FAQ agregada."); st.rerun()
         else:
             st.error("Completa patrón y respuesta.")
 del_id = st.text_input("ID FAQ a eliminar")
 if st.button("Eliminar FAQ"):
     try:
-        delete_faq(int(del_id)); st.success("FAQ eliminada."); st.experimental_rerun()
+        delete_faq(int(del_id)); st.success("FAQ eliminada."); st.rerun()
     except Exception as e:
         st.error(f"No se pudo eliminar: {e}")
 
