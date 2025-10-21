@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+import re
 import streamlit as st
 from uuid import uuid4
 
@@ -31,9 +32,9 @@ currency = cfg.get("currency", "USD")
 
 st.title(t("💬 Cliente", "💬 Client"))
 
-# Botón "Nuevo chat" sin recargar la página entera
+# Reset conversation
 if st.button(t("🗑️ Nuevo chat", "🗑️ New chat"), help=t("Reinicia esta conversación.", "Reset this conversation.")):
-    for k in ["conv_id", "conv", "client_info", "order_items", "collecting_info", "last_question_field", "prompted_confirm", "asked_for_data", "last_notified_ids"]:
+    for k in ["conv_id", "conv", "client_info", "order_items", "collecting_info", "last_question_field", "prompted_confirm", "asked_for_data", "awaiting_more_confirmation"]:
         if k in st.session_state:
             del st.session_state[k]
     st.rerun()
@@ -48,11 +49,8 @@ ss = st.session_state
 if "conv_id" not in ss:
     ss.conv_id = uuid4().hex
 if "conv" not in ss:
-    ss.conv = [{
-        "role": "assistant",
-        "content": t("Gracias por comunicarte con nosotros. ¿Cómo podemos ayudarte?",
-                     "Thanks for contacting us. How can we help?")
-    }]
+    ss.conv = [{"role": "assistant", "content": t(
+        "Gracias por comunicarte con nosotros. ¿Cómo podemos ayudarte?", "Thanks for contacting us. How can we help?")}]
 if "client_info" not in ss:
     ss.client_info = {}
 if "order_items" not in ss:
@@ -65,36 +63,33 @@ if "prompted_confirm" not in ss:
     ss.prompted_confirm = False
 if "asked_for_data" not in ss:
     ss.asked_for_data = False
-if "last_notified_ids" not in ss:
-    ss.last_notified_ids = set()
+if "awaiting_more_confirmation" not in ss:
+    ss.awaiting_more_confirmation = False
 
-# Banner de pendientes
+# Pending banner
 if has_pending_for_conversation(ss.conv_id):
     st.warning(t("⏳ Consultando con cocina… te confirmamos en ~1 minuto.",
-                 "⏳ Checking with the kitchen… we’ll confirm within ~1 minute."))
+               "⏳ Checking with the kitchen… we’ll confirm within ~1 minute."))
 
-# Inyectar decisiones del restaurante no notificadas
-decisions = fetch_unnotified_decisions(ss.conv_id)
-for d in decisions:
+# Inject kitchen decisions
+for d in fetch_unnotified_decisions(ss.conv_id):
     status = (d["status"] or "").lower()
     msg = d.get("answer") or ""
     if status == "approved":
         text = t("✅ Cocina aprobó la solicitud. Procedemos.",
                  "✅ Kitchen approved the request. Proceeding.")
-        if msg:
-            text += f" {msg}"
     elif status == "denied":
         text = t("❌ Cocina no aprobó la solicitud. Elige otra opción, por favor.",
                  "❌ Kitchen did not approve. Please choose another option.")
-        if msg:
-            text += f" {msg}"
     else:
         text = msg or t("Actualización de cocina recibida.",
                         "Kitchen replied.")
+    if msg:
+        text += f" {msg}"
     ss.conv.append({"role": "assistant", "content": text})
     mark_pending_notified(d["id"])
 
-# UI: menú
+# UI
 view = st.radio(t("Visualización del menú", "Menu view"), [
                 t("Tabla", "Table"), t("Imágenes", "Images")], horizontal=True)
 col_menu, col_chat = st.columns([1, 1])
@@ -113,57 +108,45 @@ with col_menu:
 
 with col_chat:
     for m in ss.conv:
-        if m["role"] == "user":
-            st.chat_message("user").write(m["content"])
-        else:
-            st.chat_message("assistant").write(m["content"])
+        st.chat_message("user" if m["role"] ==
+                        "user" else "assistant").write(m["content"])
 
     user_text = st.chat_input(t("Escribe tu mensaje…", "Type your message…"))
     if user_text:
         ut = user_text.strip()
         ss.conv.append({"role": "user", "content": ut})
 
-        reply = client_assistant_reply(
-            ss.conv, menu, cfg, conversation_id=ss.conv_id)
-        ss.conv.append({"role": "assistant", "content": reply})
-
-        # Extraer info y parsear items
-        info = extract_client_info(ss.conv, lang)
-        ss.client_info.update({k: v for k, v in info.items() if v})
-        ss.order_items = parse_items_from_chat(ss.conv, menu, cfg, lang=lang)
-
-        # Heurística: ¿debemos pasar a pedir datos?
-        def looks_like_total_trigger(text: str) -> bool:
-            low = (text or "").lower()
-            if "subtotal" in low:
-                return False
-            return any(tok in low for tok in ["total", "precio", "price", "usd", "$"])
-
-        def user_closed_intent(text: str) -> bool:
-            low = (text or "").lower()
-            tokens = ["eso sería todo", "nada más", "listo", "confirmar", "confirmo", "eso es todo",
-                      "that's all", "nothing else", "done", "confirm"]
-            return any(tk in low for tk in tokens)
-
-        last_assistant = next((m["content"] for m in reversed(
-            ss.conv) if m["role"] == "assistant"), "")
-        should_collect = ss.order_items and (
-            looks_like_total_trigger(last_assistant) or user_closed_intent(ut))
-
-        # Disparar bloque de datos solo una vez
-        if should_collect and not ss.asked_for_data:
-            pre = ("Ahora necesito unos datos para completar tu pedido. Te los pediré uno a uno"
-                   if lang == "es" else
-                   "I now need a few details to complete your order. I'll ask for them one by one")
-            ss.conv.append({"role": "assistant", "content": pre})
-            ss.collecting_info = True
+        # 1) If we are collecting data and we asked a field, capture it DIRECTLY (no regex)
+        if ss.collecting_info and ss.last_question_field:
+            fld = ss.last_question_field
+            val = ut
+            # tiny normalizations for some fields
+            if fld == "phone":
+                val = re.sub(r"\D+", "", val)
+            elif fld == "delivery_type":
+                low = val.lower()
+                if "pick" in low or "recog" in low or "reti" in low:
+                    val = "pickup"
+                elif "deliver" in low or "domi" in low or "env" in low:
+                    val = "delivery"
+            elif fld == "pickup_eta_min":
+                m = re.search(r"(\d{1,3})", val)
+                val = m.group(1) if m else "30"
+            elif fld == "payment_method":
+                low = val.lower()
+                if "efect" in low or "cash" in low:
+                    val = "cash"
+                elif "tarj" in low or "card" in low:
+                    val = "card"
+                else:
+                    val = "online"
+            ss.client_info[fld] = val.strip()
             ss.last_question_field = None
-            ss.asked_for_data = True
 
-        if ss.collecting_info:
+            # Ask next missing (or finish)
             missing_seq = ensure_all_required_present(ss.client_info, lang)
 
-            def next_question(field: str, lang: str, info: dict) -> str:
+            def q(field: str) -> str:
                 prompts = {
                     "name": ("¿Cuál es tu nombre?" if lang == "es" else "What is your name?"),
                     "phone": ("¿Cuál es tu número de teléfono?" if lang == "es" else "What is your phone number?"),
@@ -172,25 +155,77 @@ with col_chat:
                     "pickup_eta_min": ("¿En cuántos minutos pasarías a recoger?" if lang == "es" else "In how many minutes would you pick up?"),
                     "payment_method": ("¿Cuál es tu método de pago (efectivo, tarjeta u online)?" if lang == "es" else "What is your payment method (cash, card, online)?"),
                 }
-                if (info.get("delivery_type") or "").lower() == "delivery" and field == "pickup_eta_min":
+                if (ss.client_info.get("delivery_type") or "").lower() == "delivery" and field == "pickup_eta_min":
                     return ""
                 return prompts[field]
 
             if missing_seq:
-                nf = missing_seq[0]
-                q = next_question(nf, lang, ss.client_info)
-                if q:
-                    ss.conv.append({"role": "assistant", "content": q})
-                    ss.last_question_field = nf
+                nxt = q(missing_seq[0])
+                if nxt:
+                    ss.conv.append({"role": "assistant", "content": nxt})
+                    ss.last_question_field = missing_seq[0]
             else:
-                ss.last_question_field = None
                 ss.collecting_info = False
                 if not ss.prompted_confirm:
-                    msg = ("Pedido listo para confirmación. Por favor, presiona el botón **Confirmar**."
-                           if lang == "es" else
-                           "Order ready for confirmation. Please press the **Confirm** button.")
-                    ss.conv.append({"role": "assistant", "content": msg})
+                    ss.conv.append({"role": "assistant", "content": t(
+                        "Pedido listo para confirmación. Por favor, presiona el botón **Confirmar**.",
+                        "Order ready for confirmation. Please press the **Confirm** button."
+                    )})
                     ss.prompted_confirm = True
+
+            st.rerun()
+
+        # 2) Regular assistant reply (suggestions, subtotal, etc.)
+        reply = client_assistant_reply(
+            ss.conv, menu, cfg, conversation_id=ss.conv_id)
+        ss.conv.append({"role": "assistant", "content": reply})
+
+        # Extract info + items for subtotal
+        info_auto = extract_client_info(ss.conv, lang)
+        ss.client_info.update({k: v for k, v in info_auto.items() if v})
+        ss.order_items = parse_items_from_chat(ss.conv, menu, cfg, lang=lang)
+
+        # Ask “anything else?” if we haven't asked yet
+        if not ss.collecting_info and not ss.asked_for_data and not ss.awaiting_more_confirmation:
+            ss.conv.append({"role": "assistant", "content": t(
+                "¿Deseas agregar algo más o eso es todo?", "Would you like anything else, or is that all?")})
+            ss.awaiting_more_confirmation = True
+            st.rerun()
+
+        # If user says it's all, start data phase (ONLY then)
+        if ss.awaiting_more_confirmation:
+            low = ut.lower()
+            done_tokens = ["eso sería todo", "eso es todo", "nada más", "listo", "no, gracias", "no gracias", "ya no",
+                           "that's all", "nothing else", "no thanks", "i'm done", "done"]
+            if any(tok in low for tok in done_tokens):
+                ss.awaiting_more_confirmation = False
+                ss.collecting_info = True
+                ss.asked_for_data = True
+                pre = t("Perfecto. Ahora necesito unos datos para completar tu pedido. Te los pediré uno a uno.",
+                        "Great. I now need a few details to complete your order. I'll ask them one by one.")
+                ss.conv.append({"role": "assistant", "content": pre})
+                # Start with the first missing
+                missing_seq = ensure_all_required_present(ss.client_info, lang)
+                order = ["name", "phone", "delivery_type",
+                         "address", "pickup_eta_min", "payment_method"]
+                for f in order:
+                    if f in missing_seq:
+                        first_q = {
+                            "name": t("¿Cuál es tu nombre?", "What is your name?"),
+                            "phone": t("¿Cuál es tu número de teléfono?", "What is your phone number?"),
+                            "delivery_type": t("¿Será para recoger (pickup) o entrega a domicilio?", "Pickup or delivery?"),
+                            "address": t("¿Cuál es la dirección para la entrega?", "What is the delivery address?"),
+                            "pickup_eta_min": t("¿En cuántos minutos pasarías a recoger?", "In how many minutes would you pick up?"),
+                            "payment_method": t("¿Cuál es tu método de pago (efectivo, tarjeta u online)?", "What is your payment method (cash, card, online)?"),
+                        }[f]
+                        # If delivery, skip pickup minutes
+                        if (ss.client_info.get("delivery_type") or "").lower() == "delivery" and f == "pickup_eta_min":
+                            continue
+                        ss.conv.append(
+                            {"role": "assistant", "content": first_q})
+                        ss.last_question_field = f
+                        break
+                st.rerun()
 
         st.rerun()
 

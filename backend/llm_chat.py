@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+import difflib as _difflib2
 from typing import List, Dict, Optional
 import re
 import difflib
 import streamlit as st
 
-# OpenAI SDK directo (sin LangChain)
 try:
     from openai import OpenAI
 except ImportError as e:
     raise ImportError(
-        "Falta el paquete 'openai'. Agrega 'openai==1.51.2' a requirements.txt y redeploy."
-    ) from e
+        "Falta el paquete 'openai'. Agrega 'openai==1.51.2' a requirements.txt y redeploy.") from e
 
 try:
     from dotenv import dotenv_values
@@ -29,7 +28,6 @@ NUMWORDS_EN = {"one": 1, "a": 1, "two": 2, "three": 3, "four": 4,
 
 
 def _get_client() -> OpenAI:
-    # limpiar proxies heredados del entorno
     import os
     for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         os.environ.pop(k, None)
@@ -102,29 +100,31 @@ def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
             "and wait ~1 minute for the restaurant’s response. If there’s no response, approve with a similar estimated price.\n\n"
             "🍽 Available menu:\n" + formatted_menu + "\n\n"
             "📌 Behavior:\n"
-            "- Warm, clear, step by step. Do not invent products/ingredients.\n"
+            "- Warm, clear, and step-by-step. Do not invent products/ingredients.\n"
             "- Easy customizations: no onions, sauce on the side, extra fries, mild spice, no salt, with ice, lemon, ketchup/mayonnaise.\n"
             "- Other customizations → check with the kitchen.\n"
             "- Use the internal FAQ if there’s a registered answer.\n"
             "- Keep a running subtotal while proposing add-ons.\n\n"
-            "🧾 Data: ask ONE BY ONE after showing the total:\n"
+            "🧾 Data: ask ONE BY ONE after the total:\n"
             "  1) name  2) phone  3) pickup or delivery  4) address (if delivery)  5) payment method.\n"
             "For pickup you can ask for minutes (default 30). For delivery DO NOT ask for minutes.\n"
             "Do NOT invite to confirm until you have all the data.\n\n"
             "✅ At the end: “Order ready for confirmation. Please press the Confirm button.”"
+
         )
 
 
-# ---------- Heurística de complejidad / fuera de menú ----------
+# Broadened intent tokens (covers “¿Puede ser…?”, “¿Podría…?”, “Quisiera…?”)
+_ACTION_TOKENS = {
+    "quiero", "pedir", "ordena", "ordenar", "agrega", "agregar", "quitar", "sin", "con", "extra",
+    "doble", "triple", "cambiar", "sustituir", "reducir", "añadir", "sumar", "puede", "podria", "podría", "quisiera", "seria", "sería"
+}
 _EASY_INGREDIENTS = {
     "cebolla", "salsa", "papas", "picante", "sal", "azucar", "azúcar", "hielo", "limon", "limón", "mayonesa", "ketchup"
 }
-_ACTION_TOKENS = {"quiero", "pedir", "ordena", "ordenar", "agrega", "agregar", "quitar", "sin",
-                  "con", "extra", "doble", "triple", "cambiar", "sustituir", "reducir", "añadir", "sumar"}
 
 
 def _build_aliases(menu: List[Dict]) -> Dict[str, str]:
-    """ alias simples a nombre de item (desde nombre, plurales, primera palabra de descripción y tags) """
     variants: Dict[str, str] = {}
 
     def add_alias(alias: str, to_name: str):
@@ -136,7 +136,6 @@ def _build_aliases(menu: List[Dict]) -> Dict[str, str]:
         variants[a] = to_name
         if not a.endswith("s"):
             variants[a+"s"] = to_name
-
     for m in (menu or []):
         nm = (m.get("name") or "").strip()
         if not nm:
@@ -162,61 +161,47 @@ def _build_aliases(menu: List[Dict]) -> Dict[str, str]:
 
 def _should_create_pending(user_text: str, menu: List[Dict]) -> bool:
     """
-    True si:
-      - (A) Hay intención de pedido y no se reconoce ningún item del menú → fuera de menú.
-      - (B) Se reconoce un ítem pero hay personalización no “fácil” → complejo.
+    True if:
+      (A) There's ordering intent and no menu items recognized → off-menu (e.g., “duraznos en almíbar”).
+      (B) A menu item is recognized but customization is not in the “easy” set → complex.
     """
     text_low = (user_text or "").lower()
     tokens = set(re.findall(r"[\wáéíóúñ]+", text_low))
-    has_intent = bool(_ACTION_TOKENS & tokens) or (
-        "durazno" in text_low or "almibar" in text_low or "almíbar" in text_low)
-    aliases = _build_aliases(menu)
+    has_intent = bool(_ACTION_TOKENS & tokens)
+    # Robust stem for 'durazno(s)' + almíbar variants as extra signal of edible request
+    if ("durazn" in text_low) or ("almibar" in text_low) or ("almíbar" in text_low):
+        has_intent = True
 
-    # Detectar ítems mencionados
+    aliases = _build_aliases(menu)
     mentioned = []
     for tok in tokens:
         if tok in aliases:
             mentioned.append(aliases[tok])
         else:
-            # fuzzy muy conservador
             cands = difflib.get_close_matches(
                 tok, list(aliases.keys()), n=1, cutoff=0.9)
             if cands:
                 mentioned.append(aliases[cands[0]])
-
-    mentioned = list(dict.fromkeys(mentioned))  # unique, keep order
+    mentioned = list(dict.fromkeys(mentioned))
 
     if has_intent and not mentioned:
-        # No podemos mapear nada del menú pero hay intención → fuera de menú
-        return True
+        return True  # off-menu request
 
-    # Personalizaciones complejas: presencia de acción + ingrediente no fácil
     if mentioned:
-        # ingredientes candidatos (palabras después de 'sin|con|extra|doble|triple')
-        m = re.findall(
+        mods = re.findall(
             r"(?:sin|con|extra|doble|triple)\s+([\wáéíóúñ]+)", text_low)
-        for ing in m:
-            base = ing.strip().lower()
-            if base and base not in _EASY_INGREDIENTS:
-                return True
-
+        for ing in mods:
+            if ing.strip().lower() not in _EASY_INGREDIENTS:
+                return True  # complex customization
     return False
-# ----------------------------------------------------------
 
 
-def client_assistant_reply(
-    history: List[Dict],
-    menu: List[Dict],
-    cfg: dict | None,
-    conversation_id: str,
-    tenant_id: Optional[int] = None
-) -> str:
+def client_assistant_reply(history: List[Dict], menu: List[Dict], cfg: dict | None, conversation_id: str, tenant_id: Optional[int] = None) -> str:
     cfg = cfg or get_config()
     lang = cfg.get("language", "es")
     last_user = next((m["content"] for m in reversed(
         history) if m.get("role") == "user"), "")
 
-    # 1) Heurística de complejidad / fuera de menú → crear pending automático
     if last_user and _should_create_pending(last_user, menu):
         try:
             create_pending_question(
@@ -227,28 +212,22 @@ def client_assistant_reply(
                 if lang == "es" else
                 "Got it, checking with the kitchen. Give me ~1 minute and I’ll confirm. 🙌")
 
-    # 2) FAQ primero
     if last_user:
         faq_ans = match_faq(last_user, language=lang, tenant_id=tenant_id)
         if faq_ans:
             return faq_ans
 
-    # 3) OpenAI Chat completions
     client = _get_client()
     system = _system_prompt(cfg, menu, lang)
     msgs = [{"role": "system", "content": system}] + history[-12:]
     model = cfg.get("model", "gpt-4o-mini")
     temp = float(cfg.get("temperature", 0.4))
-
     resp = client.chat.completions.create(
-        model=model,
-        temperature=temp,
-        messages=msgs
-    )
-    reply = (resp.choices[0].message.content or "").strip()
-    return reply
+        model=model, temperature=temp, messages=msgs)
+    return (resp.choices[0].message.content or "").strip()
 
 
+# -------- parse_items_from_chat, ensure_all_required_present, extract_client_info (unchanged) --------
 def _numbers_in_text(text: str, lang: str) -> Dict[str, int]:
     out = {}
     tokens = re.findall(r"[\wáéíóúñ]+", text.lower())
@@ -262,7 +241,6 @@ def _numbers_in_text(text: str, lang: str) -> Dict[str, int]:
 
 
 def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang: str | None = None) -> List[Dict]:
-    # 1) nombres + plurales; 2) alias por descripción/tags; 3) fuzzy; 4) cantidades
     text_low = "\n".join([m.get("content", "")
                          for m in history if m.get("role") == "user"]).lower()
     names = [m["name"] for m in (menu or []) if m.get("name")]
@@ -311,7 +289,7 @@ def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang
 
     if not found:
         for tok in set(tokens):
-            cands = difflib.get_close_matches(
+            cands = _difflib2.get_close_matches(
                 tok, list(variants.keys()), n=1, cutoff=0.86)
             if cands:
                 found[variants[cands[0]]] += 1
@@ -338,12 +316,6 @@ def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang
 
 
 def ensure_all_required_present(info: Dict, lang: str) -> List[str]:
-    """
-    Obligatorios:
-      - Siempre: name, phone, delivery_type, payment_method
-      - Si delivery: address
-      - Si pickup: pickup_eta_min (si falta, default=30)
-    """
     req = ["name", "phone", "delivery_type", "payment_method"]
     if (info.get("delivery_type") or "").lower() == "delivery":
         req.append("address")
@@ -359,7 +331,6 @@ def ensure_all_required_present(info: Dict, lang: str) -> List[str]:
     return missing
 
 
-# Extracción de datos del cliente
 _NAME_PAT_ES = re.compile(
     r"(?i)(?:me\s+llamo|soy|mi\s+nombre\s*(?:es|:))\s*([A-Za-zÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑ\s]{1,})")
 _NAME_PAT_EN = re.compile(
