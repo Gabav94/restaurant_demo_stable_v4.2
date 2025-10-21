@@ -105,44 +105,25 @@ def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
             "🎯 Style: kind, professional, concise and guided."
         )
 
-def client_assistant_reply(
-    history: List[Dict], 
-    menu: List[Dict], 
-    cfg: dict | None, 
-    conversation_id: str, 
-    tenant_id: Optional[int] = None
-) -> str:
+def client_assistant_reply(history: List[Dict], menu: List[Dict], cfg: dict | None, conversation_id: str, tenant_id: Optional[int] = None) -> str:
     cfg = cfg or get_config()
     lang = cfg.get("language", "es")
     last_user = next((m["content"] for m in reversed(history) if m.get("role")=="user"), "")
-
-    # FAQ primero
     if last_user:
         faq_ans = match_faq(last_user, language=lang, tenant_id=tenant_id)
-        if faq_ans:
-            return faq_ans
-
+        if faq_ans: return faq_ans
     llm = _get_llm(cfg)
     sys = _system_prompt(cfg, menu, lang)
     msgs = [{"role":"system","content":sys}] + history[-12:]
     res = llm.invoke(msgs)
     reply = (res.content or "").strip()
-
-    # Si el asistente indica consulta a cocina → marcar pending
     low = reply.lower()
     if ("consultando con cocina" in low) or ("checking with the kitchen" in low):
         try:
-            create_pending_question(
-                conversation_id=conversation_id, 
-                question=last_user, 
-                language=lang, 
-                ttl_seconds=60
-            )
+            create_pending_question(conversation_id=conversation_id, question=last_user, language=lang, ttl_seconds=60)
         except Exception:
             pass
-
     return reply
-
 
 def _numbers_in_text(text: str, lang: str) -> Dict[str,int]:
     out = {}
@@ -155,14 +136,10 @@ def _numbers_in_text(text: str, lang: str) -> Dict[str,int]:
             out[tok] = m[tok]
     return out
 
-
 def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang: str | None = None) -> List[Dict]:
-    # 1) keyword + plurales; 2) difflib fuzzy (>0.86); 3) cantidades básicas
     text_low = "\n".join([m.get("content","") for m in history if m.get("role")=="user"]).lower()
     names = [m["name"] for m in (menu or []) if m.get("name")]
     price_map = {m["name"]: float(m.get("price",0.0)) for m in (menu or [])}
-
-    # Variantes simples/plurales
     variants = {}
     for nm in names:
         low = nm.lower()
@@ -170,65 +147,32 @@ def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang
         if not low.endswith("s"): variants[low+"s"] = nm
         if low.endswith("a"): variants[low[:-1]+"as"] = nm
         if low.endswith("o"): variants[low[:-1]+"os"] = nm
-
-    # Búsqueda por token
     from collections import defaultdict
     found = defaultdict(int)
     tokens = re.findall(r"[\wáéíóúñ]+", text_low)
     for tok in tokens:
         if tok in variants:
             found[variants[tok]] += 1
-
-    # Fuzzy si no hubo match exacto
     if not found:
         for tok in set(tokens):
             cands = difflib.get_close_matches(tok, list(variants.keys()), n=1, cutoff=0.86)
             if cands:
                 found[variants[cands[0]]] += 1
-
-    # Cantidades antes del nombre
     num_map = _numbers_in_text(text_low, (lang or cfg.get("language","es")))
-
     def qty_before(name_low: str) -> int:
         pat = rf"(\b(\d+|{'|'.join(num_map.keys())})\s+{re.escape(name_low)}(es|s)?)"
         m = re.search(pat, text_low)
         if m:
             val = m.group(2)
-            if val.isdigit(): 
-                return int(val)
+            if val.isdigit(): return int(val)
             return num_map.get(val, 1)
         return 1
-
     items = []
     for nm, count in found.items():
         q = max(qty_before(nm.lower()), count)
         items.append({"name": nm, "qty": q, "unit_price": price_map.get(nm, 0.0)})
     return items
 
-
-def ensure_all_required_present(info: Dict, lang: str) -> List[str]:
-    """
-    Verifica campos obligatorios para poder confirmar el pedido.
-    - Siempre: name, phone, delivery_type, payment_method
-    - Si delivery: address
-    - Si pickup: pickup_eta_min (si falta, autocompleta 30)
-    """
-    req = ["name","phone","delivery_type","payment_method"]
-    if info.get("delivery_type") == "delivery":
-        req.append("address")
-    else:
-        req.append("pickup_eta_min")
-    missing = [k for k in req if not str(info.get(k,"")).strip()]
-    if "pickup_eta_min" in missing and info.get("delivery_type") == "pickup":
-        info["pickup_eta_min"] = 30
-        try:
-            missing.remove("pickup_eta_min")
-        except ValueError:
-            pass
-    return missing
-
-
-# Extracción de datos del cliente desde el historial
 _NAME_PAT_ES = re.compile(r"(?i)(?:me\s+llamo|soy|mi\s+nombre\s*(?:es|:))\s*([A-Za-zÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑ\s]{1,})")
 _NAME_PAT_EN = re.compile(r"(?i)(?:i\s*am|i'm|my\s+name\s*(?:is|:))\s*([A-Za-z][A-Za-z\s]{1,})")
 _PHONE_PAT_HINT = re.compile(r"(?<!\d)(\+?\d[\d\-\s]{6,}\d)(?!\d)")
@@ -241,32 +185,23 @@ _PICKUP_ES = re.compile(r"(?i)(retir|recoger|pickup)")
 _DELIVERY_EN = re.compile(r"(?i)(delivery|deliver)")
 _PICKUP_EN = re.compile(r"(?i)(pickup|pick up)")
 
-
 def extract_client_info(history: List[Dict], lang: str) -> Dict:
     text = " \n".join([m.get("content","") for m in history if m.get("role")=="user"])
     out = {"name":"", "phone":"", "delivery_type":"", "address":"", "pickup_eta_min":"", "payment_method":""}
     m = (_NAME_PAT_ES.search(text) if lang=="es" else _NAME_PAT_EN.search(text))
-    if m:
-        out["name"] = m.group(1).strip()
+    if m: out["name"] = m.group(1).strip()
     m = _PHONE_PAT_LABELED.search(text) or _PHONE_PAT_HINT.search(text)
     if m:
         import re as _re
         out["phone"] = _re.sub(r"\s+","", m.group(1)).replace("-","")
-    if (_DELIVERY_ES.search(text) if lang=="es" else _DELIVERY_EN.search(text)):
-        out["delivery_type"] = "delivery"
-    if (_PICKUP_ES.search(text) if lang=="es" else _PICKUP_EN.search(text)):
-        out["delivery_type"] = out["delivery_type"] or "pickup"
+    if (_DELIVERY_ES.search(text) if lang=="es" else _DELIVERY_EN.search(text)): out["delivery_type"] = "delivery"
+    if (_PICKUP_ES.search(text) if lang=="es" else _PICKUP_EN.search(text)): out["delivery_type"] = out["delivery_type"] or "pickup"
     m = (_ADDRESS_PAT_ES.search(text) if lang=="es" else _ADDRESS_PAT_EN.search(text))
-    if m:
-        out["address"] = m.group(1).strip()
+    if m: out["address"] = m.group(1).strip()
     m = _MIN_PAT.search(text)
-    if m:
-        out["pickup_eta_min"] = m.group(1).strip()
+    if m: out["pickup_eta_min"] = m.group(1).strip()
     import re as _re2
-    if _re2.search(r"(?i)(efectivo|cash)", text):
-        out["payment_method"] = "cash"
-    elif _re2.search(r"(?i)(tarjeta|card)", text):
-        out["payment_method"] = "card"
-    elif _re2.search(r"(?i)(online|transfer|transferencia|bank)", text):
-        out["payment_method"] = "online"
+    if _re2.search(r"(?i)(efectivo|cash)", text): out["payment_method"] = "cash"
+    elif _re2.search(r"(?i)(tarjeta|card)", text): out["payment_method"] = "card"
+    elif _re2.search(r"(?i)(online|transfer|transferencia|bank)", text): out["payment_method"] = "online"
     return out

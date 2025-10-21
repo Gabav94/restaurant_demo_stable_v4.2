@@ -31,7 +31,7 @@ def _safe_st_image(img_bytes_or_path):
     """
     try:
         # Streamlit >= 1.31 aprox
-        st.image(img_bytes_or_path, width='stretch')
+        st.image(img_bytes_or_path, use_container_width=True)
     except TypeError:
         # Streamlit antiguos
         st.image(img_bytes_or_path, use_column_width=True)
