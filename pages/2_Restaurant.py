@@ -13,6 +13,10 @@ from backend.db import (
     export_orders_csv, export_pendings_csv, verify_login
 )
 
+from backend.db import init_db
+# crea tablas que falten (incluida pendings) y aplica migraciones
+init_db(seed=True)
+
 st.set_page_config(page_title="Restaurante", page_icon="🧑‍🍳", layout="wide")
 
 

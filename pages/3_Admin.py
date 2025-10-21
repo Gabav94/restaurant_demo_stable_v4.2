@@ -6,6 +6,9 @@ import pandas as pd
 from backend.config import get_config, save_config, get_db_path, get_data_dir
 from backend.db import get_tenants, create_tenant, create_user, list_faqs, add_faq, delete_faq, verify_login
 
+from backend.db import init_db
+init_db(seed=True)  # crea tablas que falten (incluida pendings) y aplica migraciones
+
 st.set_page_config(page_title="Admin", page_icon="🛠️", layout="wide")
 
 cfg = get_config()

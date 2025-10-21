@@ -18,6 +18,10 @@ from backend.llm_chat import (
     parse_items_from_chat
 )
 
+from backend.db import init_db
+# crea tablas que falten (incluida pendings) y aplica migraciones
+init_db(seed=True)
+
 st.set_page_config(page_title="Cliente", page_icon="💬", layout="wide")
 
 
