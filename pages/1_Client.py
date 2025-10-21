@@ -123,9 +123,11 @@ with col_chat:
         # 1) If we are collecting data and we asked a field, capture it DIRECTLY (no regex)
         if ss.collecting_info and ss.last_question_field:
             fld = ss.last_question_field
-            val = ut
-            # tiny normalizations for some fields
+            val = ut  # <-- lo que el usuario acaba de escribir
+
+            # normalizaciones mínimas SOLO para ciertos campos
             if fld == "phone":
+                import re
                 val = re.sub(r"\D+", "", val)
             elif fld == "delivery_type":
                 low = val.lower()
@@ -134,6 +136,7 @@ with col_chat:
                 elif "deliver" in low or "domi" in low or "env" in low:
                     val = "delivery"
             elif fld == "pickup_eta_min":
+                import re
                 m = re.search(r"(\d{1,3})", val)
                 val = m.group(1) if m else "30"
             elif fld == "payment_method":
@@ -144,6 +147,10 @@ with col_chat:
                     val = "card"
                 else:
                     val = "online"
+            elif fld == "address":
+                # ⬅️ aquí SIN regex: guardamos tal cual lo que el usuario escribió
+                val = val.strip()
+
             ss.client_info[fld] = val.strip()
             ss.last_question_field = None
 
