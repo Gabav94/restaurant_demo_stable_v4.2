@@ -8,11 +8,12 @@ import difflib
 import streamlit as st
 
 # Hacer el import de ChatOpenAI amigable (mensaje claro si falta la dependencia)
+# Usamos el SDK oficial de OpenAI (no langchain) para evitar conflictos de versión
 try:
-    from langchain_openai import ChatOpenAI
+    from openai import OpenAI
 except ImportError as e:
     raise ImportError(
-        "Falta el paquete 'langchain-openai'. Agrega 'langchain-openai==0.1.23' a requirements.txt y vuelve a desplegar."
+        "Falta el paquete 'openai'. Agrega 'openai==1.51.2' a requirements.txt y vuelve a desplegar."
     ) from e
 
 # En Cloud usamos st.secrets; en local, dotenv si existe
@@ -31,14 +32,13 @@ NUMWORDS_EN = {"one": 1, "a": 1, "two": 2, "three": 3, "four": 4,
                "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
 
-def _get_llm(cfg: dict) -> ChatOpenAI:
+def _get_client() -> OpenAI:
     key = st.secrets.get(
         "OPENAI_API_KEY") or dotenv_values().get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("Falta OPENAI_API_KEY en .env / secrets")
-    model = cfg.get("model", "gpt-4o-mini")
-    temp = float(cfg.get("temperature", 0.4))
-    return ChatOpenAI(api_key=key, model=model, temperature=temp)
+    # Pasamos la API key explícitamente (evita relies solo en env var)
+    return OpenAI(api_key=key)
 
 
 def _format_price(p) -> str:
@@ -134,11 +134,26 @@ def client_assistant_reply(
         if faq_ans:
             return faq_ans
 
-    llm = _get_llm(cfg)
-    sys = _system_prompt(cfg, menu, lang)
-    msgs = [{"role": "system", "content": sys}] + history[-12:]
-    res = llm.invoke(msgs)
-    reply = (res.content or "").strip()
+    # ChatOpenAI
+    # llm = _get_client(cfg)
+    # sys = _system_prompt(cfg, menu, lang)
+    # msgs = [{"role": "system", "content": sys}] + history[-12:]
+    # res = llm.invoke(msgs)
+    # reply = (res.content or "").strip()
+    
+    # OpenAI Chat completions (SDK oficial)
+    client = _get_client()
+    system = _system_prompt(cfg, menu, lang)
+    msgs = [{"role": "system", "content": system}] + history[-12:]
+    model = cfg.get("model", "gpt-4o-mini")
+    temp = float(cfg.get("temperature", 0.4))
+
+    resp = client.chat.completions.create(
+        model=model,
+        temperature=temp,
+        messages=msgs
+    )
+    reply = (resp.choices[0].message.content or "").strip()
 
     # Si el asistente indica consulta a cocina → marcar pending
     low = reply.lower()
