@@ -97,7 +97,7 @@ def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
             "- Use the internal FAQ if there is a recorded answer.\n"
             "- Keep a subtotal while proposing extras, adjustments, and additions.\n\n"
             "🧾 When you have the order and show the total, explicitly MENTION:\n"
-            "  "Now I need some information to complete your order. . ." and then ask ONE BY ONE:\n"
+            "  "Now I need some information to complete your order," and then ask ONE BY ONE:\n"
             "  1) name  2) phone number  3) pickup or delivery  4) address (if delivery) or pickup time (if pickup)  5) payment method."
             "DO NOT ask for confirmation until you have all the information."
             "✅ When everything is complete: ”Order ready for confirmation. Please press the Confirm Order button."\n"
