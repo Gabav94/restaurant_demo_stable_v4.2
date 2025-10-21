@@ -161,18 +161,38 @@ def _build_aliases(menu: List[Dict]) -> Dict[str, str]:
 
 def _should_create_pending(user_text: str, menu: List[Dict]) -> bool:
     """
-    True if:
-      (A) There's ordering intent and no menu items recognized → off-menu (e.g., “duraznos en almíbar”).
-      (B) A menu item is recognized but customization is not in the “easy” set → complex.
+    Create a pending ONLY when:
+      A) Explicit ask to check with restaurant (preguntar/consultar/cocina), OR
+      B) A complex customization: 'sin|con|extra|doble|triple' + ingredient NOT in EASY set, OR
+      C) Clear off-menu hint words (e.g., 'almíbar', 'durazno(s)', 'canela', etc.) AND those terms
+         do not map to any menu alias (i.e., it's not recognized from the menu).
     """
     text_low = (user_text or "").lower()
     tokens = set(re.findall(r"[\wáéíóúñ]+", text_low))
-    has_intent = bool(_ACTION_TOKENS & tokens)
-    # Robust stem for 'durazno(s)' + almíbar variants as extra signal of edible request
-    if ("durazn" in text_low) or ("almibar" in text_low) or ("almíbar" in text_low):
-        has_intent = True
+
+    # A) Explicit ask to check
+    if re.search(r"(?i)\b(preguntar|consultar|cocina)\b", text_low):
+        return True
 
     aliases = _build_aliases(menu)
+
+    # B) Complex customization (non-easy ingredient after sin/con/extra/doble/triple)
+    mods = re.findall(
+        r"(?:\b(?:sin|con|extra|doble|triple)\s+)([\wáéíóúñ]+)", text_low)
+    for ing in mods:
+        if ing.strip().lower() not in _EASY_INGREDIENTS:
+            # If the text mentions at least one menu item or is clearly modifying something,
+            # treat as complex and escalate.
+            return True
+
+    # C) Off-menu hints (conservative list; expand as needed)
+    OFFMENU_HINTS = [
+        "almibar", "almíbar", "durazn", "melocoton", "melocotón", "canela",
+        "sirope", "almendra", "maracuy", "arándano", "arandano", "tamarindo"
+    ]
+    has_offmenu_word = any(h in text_low for h in OFFMENU_HINTS)
+
+    # Recognized menu tokens?
     mentioned = []
     for tok in tokens:
         if tok in aliases:
@@ -184,15 +204,11 @@ def _should_create_pending(user_text: str, menu: List[Dict]) -> bool:
                 mentioned.append(aliases[cands[0]])
     mentioned = list(dict.fromkeys(mentioned))
 
-    if has_intent and not mentioned:
-        return True  # off-menu request
+    # Only consider off-menu pending if we saw an off-menu hint and nothing from the menu matched
+    if has_offmenu_word and not mentioned:
+        return True
 
-    if mentioned:
-        mods = re.findall(
-            r"(?:sin|con|extra|doble|triple)\s+([\wáéíóúñ]+)", text_low)
-        for ing in mods:
-            if ing.strip().lower() not in _EASY_INGREDIENTS:
-                return True  # complex customization
+    # Otherwise, do NOT create a pending for generic messages like "hola, quiero ordenar"
     return False
 
 

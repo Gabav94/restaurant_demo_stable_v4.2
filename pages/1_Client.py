@@ -189,8 +189,11 @@ with col_chat:
         ss.client_info.update({k: v for k, v in info_auto.items() if v})
         ss.order_items = parse_items_from_chat(ss.conv, menu, cfg, lang=lang)
 
-        # Ask “anything else?” if we haven't asked yet
-        if not ss.collecting_info and not ss.asked_for_data and not ss.awaiting_more_confirmation:
+        # Ask “anything else?” ONLY if there's at least one detected item (we have a subtotal)
+        if (ss.order_items  # must have items
+            and not ss.collecting_info
+            and not ss.asked_for_data
+                and not ss.awaiting_more_confirmation):
             ss.conv.append({"role": "assistant", "content": t(
                 "¿Deseas agregar algo más o eso es todo?", "Would you like anything else, or is that all?")})
             ss.awaiting_more_confirmation = True
