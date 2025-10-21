@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import List, Dict, Optional
-import json, re, difflib
+import json
+import re
+import difflib
 import streamlit as st
 
 # Hacer el import de ChatOpenAI amigable (mensaje claro si falta la dependencia)
@@ -23,12 +25,15 @@ from .config import get_config
 from .faq import match_faq
 from .db import create_pending_question
 
-NUMWORDS_ES = {"uno":1,"una":1,"dos":2,"tres":3,"cuatro":4,"cinco":5,"seis":6,"siete":7,"ocho":8,"nueve":9,"diez":10}
-NUMWORDS_EN = {"one":1,"a":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,"ten":10}
+NUMWORDS_ES = {"uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4,
+    "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10}
+NUMWORDS_EN = {"one": 1, "a": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
 
 def _get_llm(cfg: dict) -> ChatOpenAI:
-    key = st.secrets.get("OPENAI_API_KEY") or dotenv_values().get("OPENAI_API_KEY")
+    key = st.secrets.get(
+        "OPENAI_API_KEY") or dotenv_values().get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("Falta OPENAI_API_KEY en .env / secrets")
     model = cfg.get("model", "gpt-4o-mini")
@@ -46,8 +51,8 @@ def _format_price(p) -> str:
 def _format_menu(menu: List[Dict]) -> str:
     lines = []
     for it in (menu or [])[:120]:
-        name = (it.get("name","") or "").strip()
-        if not name: 
+        name = (it.get("name", "") or "").strip()
+        if not name:
             continue
         desc = (it.get("description") or "").strip()
         price = _format_price(it.get("price", 0))
@@ -55,15 +60,18 @@ def _format_menu(menu: List[Dict]) -> str:
         notes = (it.get("special_notes") or "").strip()
         notes_txt = f" — [{notes}]" if notes else ""
         line = f"- {name} ({cur} {price}){notes_txt}"
-        if desc: 
+        if desc:
             line += f"\n  {desc}"
         lines.append(line)
     return "\n".join(lines)
 
+
 def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
     formatted_menu = _format_menu(menu)
-    tone = cfg.get("tone") or ("Amable y profesional; breve, guiado." if lang=="es" else "Friendly and professional; concise, guided.")
-    assistant_name = cfg.get("assistant_name", "Asistente" if lang=="es" else "Assistant")
+    tone = cfg.get("tone") or ("Amable y profesional; breve, guiado." if lang ==
+                   "es" else "Friendly and professional; concise, guided.")
+    assistant_name = cfg.get(
+        "assistant_name", "Asistente" if lang == "es" else "Assistant")
     if lang == "es":
         return (
             f"Eres {assistant_name}, un asistente de pedidos para un restaurante. Responde SIEMPRE en español.\n"
@@ -77,7 +85,7 @@ def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
             "- Usa la FAQ interna si hay respuesta registrada.\n"
             "- Lleva un subtotal mientras propone extras, ajustes y adicionales.\n\n"
             "🧾 Cuando tengas el pedido y muestres el total, MENCIONA explícitamente:\n"
-            "  "Ahora necesito unos datos para completar tu pedido…" y luego pregunta UNO A UNO:\n"
+            "  "Ahora necesito unos datos para completar tu pedido, " y luego pregunta UNO A UNO:\n"
             "  1) nombre  2) teléfono  3) pickup o delivery  4) dirección (si delivery) o minutos de retiro (si pickup)  5) método de pago.\n"
             "NO invites a confirmar hasta tener todos los datos.\n\n"
             "✅ Cuando todo esté completo: "Pedido listo para confirmación. Por favor, presiona el botón Confirmar Pedido."\n"
@@ -86,7 +94,8 @@ def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
         )
     else:
         return (
-            f"You are {assistant_name}, an order assistant for a restaurant. ALWAYS respond in English.\n"
+            f"You are {
+                assistant_name}, an order assistant for a restaurant. ALWAYS respond in English.\n"
             f"Your tone: {tone}\n\n"
             "Objective: help the customer place their order based on the menu and confirm details. \n"
             "Suggest side dishes and drinks. If they order something off the menu, ask the restaurant if it's possible and wait for confirmation.\n\n"
