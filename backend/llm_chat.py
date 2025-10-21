@@ -77,11 +77,11 @@ def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
             "- Usa la FAQ interna si hay respuesta registrada.\n"
             "- Lleva un subtotal mientras propone extras, ajustes y adicionales.\n\n"
             "🧾 Cuando tengas el pedido y muestres el total, MENCIONA explícitamente:\n"
-            "  "Ahora necesito unos datos para completar tu pedido…” y luego pregunta UNO A UNO:\n"
+            "  "Ahora necesito unos datos para completar tu pedido…" y luego pregunta UNO A UNO:\n"
             "  1) nombre  2) teléfono  3) pickup o delivery  4) dirección (si delivery) o minutos de retiro (si pickup)  5) método de pago.\n"
             "NO invites a confirmar hasta tener todos los datos.\n\n"
-            "✅ Cuando todo esté completo: "Pedido listo para confirmación. Por favor, presiona el botón Confirmar Pedido.”\n"
-            "🛑 Si dice "stop”, termina con amabilidad.\n"
+            "✅ Cuando todo esté completo: "Pedido listo para confirmación. Por favor, presiona el botón Confirmar Pedido."\n"
+            "🛑 Si dice "stop", termina con amabilidad.\n"
             "🎯 Estilo: amable, profesional, breve y guiado."
         )
     else:
@@ -93,15 +93,15 @@ def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
             "🍽 Available menu:\n” + formatted_menu + "\n\n"
             "📌 Behavior:\n"
             "- Warm, clear, step by step. Do not invent products/ingredients.\n"
-            "- Customizations: accept no onions, sauce on the side, extra potatoes, etc. Adjust the price if applicable or the restaurant's option when you have to ask for confirmation.\n”
-            "- Use the internal FAQ if there is a recorded answer.\n”
-            "- Keep a subtotal while proposing extras, adjustments, and additions.\n\n”
-            "🧾 When you have the order and show the total, explicitly MENTION:\n”
-            "  ”Now I need some information to complete your order..." and then ask ONE BY ONE:\n”
-            "  1) name  2) phone number  3) pickup or delivery  4) address (if delivery) or pickup time (if pickup)  5) payment method.”
-            "DO NOT ask for confirmation until you have all the information.”
-            "✅ When everything is complete: ”Order ready for confirmation. Please press the Confirm Order button."\n”
-            "🛑 If they say ”stop," end the call politely.\n”
+            "- Customizations: accept no onions, sauce on the side, extra potatoes, etc. Adjust the price if applicable or the restaurant's option when you have to ask for confirmation.\n"
+            "- Use the internal FAQ if there is a recorded answer.\n"
+            "- Keep a subtotal while proposing extras, adjustments, and additions.\n\n"
+            "🧾 When you have the order and show the total, explicitly MENTION:\n"
+            "  "Now I need some information to complete your order..." and then ask ONE BY ONE:\n"
+            "  1) name  2) phone number  3) pickup or delivery  4) address (if delivery) or pickup time (if pickup)  5) payment method."
+            "DO NOT ask for confirmation until you have all the information."
+            "✅ When everything is complete: ”Order ready for confirmation. Please press the Confirm Order button."\n"
+            "🛑 If they say "stop," end the call politely.\n"
             "🎯 Style: kind, professional, concise and guided."
         )
 
