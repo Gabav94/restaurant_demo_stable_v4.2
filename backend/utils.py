@@ -11,29 +11,23 @@ def menu_table_component(menu: list[dict], lang: str, deletable: bool = False, o
         return
     df = pd.DataFrame(menu)
     try:
-        st.dataframe(df, hide_index=True, width='stretch')  # Streamlit nuevos
+        st.dataframe(df, hide_index=True, width='stretch')
     except TypeError:
-        st.dataframe(df, hide_index=True)  # Streamlit antiguos
+        st.dataframe(df, hide_index=True)
     if deletable and on_delete:
         names = [m["name"] for m in menu]
-        sel = st.selectbox("Eliminar ítem" if lang == "es" else "Delete item", names if names else ["-"])
+        sel = st.selectbox("Eliminar ítem" if lang ==
+                           "es" else "Delete item", names if names else ["-"])
         if st.button("Eliminar" if lang == "es" else "Delete") and sel and sel != "-":
             on_delete(sel)
             st.success("OK")
-            st.experimental_rerun()
+            st.rerun()
 
 
 def _safe_st_image(img_bytes_or_path):
-    """
-    Muestra la imagen compatible con versiones viejas/nuevas de Streamlit.
-    - Primero intenta `use_container_width=True` (nuevo).
-    - Si falla, usa `use_column_width=True` (legacy).
-    """
     try:
-        # Streamlit >= 1.31 aprox
-        st.image(img_bytes_or_path, width='stretch')
+        st.image(img_bytes_or_path, use_container_width=True)
     except TypeError:
-        # Streamlit antiguos
         st.image(img_bytes_or_path, use_column_width=True)
 
 
@@ -45,14 +39,9 @@ def render_js_carousel(
     aspect_ratio: float = 16 / 9,
     height_px: int = 420,
 ):
-    """
-    Acepta rutas (str) o bytes. Normaliza a bytes para evitar fallas si la ruta
-    no es accesible desde el runtime (caso típico en Streamlit Cloud).
-    """
     if not images:
         return
 
-    # Normalizar a bytes leyendo desde disco si son rutas
     normalized: list[bytes] = []
     for itm in images:
         try:
@@ -63,7 +52,6 @@ def render_js_carousel(
                     with open(itm, "rb") as f:
                         normalized.append(f.read())
                 else:
-                    # ruta inválida: la omitimos
                     continue
             else:
                 continue
@@ -79,13 +67,14 @@ def render_js_carousel(
         st.session_state[idx_key] = 0
     i = st.session_state[idx_key] % len(normalized)
 
-    # Mostrar imagen como bytes (no ruta); compatible con distintas versiones
     _safe_st_image(normalized[i])
 
     c1, _, c3 = st.columns(3)
     if c1.button("⏮️", key=f"{key_prefix}_prev"):
-        st.session_state[idx_key] = (st.session_state[idx_key] - 1) % len(normalized)
+        st.session_state[idx_key] = (
+            st.session_state[idx_key] - 1) % len(normalized)
         st.rerun()
     if c3.button("⏭️", key=f"{key_prefix}_next"):
-        st.session_state[idx_key] = (st.session_state[idx_key] + 1) % len(normalized)
+        st.session_state[idx_key] = (
+            st.session_state[idx_key] + 1) % len(normalized)
         st.rerun()

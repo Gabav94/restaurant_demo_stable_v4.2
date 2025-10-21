@@ -1,22 +1,18 @@
-
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import List, Dict, Optional
-import json
 import re
 import difflib
 import streamlit as st
 
-# Hacer el import de ChatOpenAI amigable (mensaje claro si falta la dependencia)
-# Usamos el SDK oficial de OpenAI (no langchain) para evitar conflictos de versión
+# OpenAI SDK directo (sin LangChain)
 try:
     from openai import OpenAI
 except ImportError as e:
     raise ImportError(
-        "Falta el paquete 'openai'. Agrega 'openai==1.51.2' a requirements.txt y vuelve a desplegar."
+        "Falta el paquete 'openai'. Agrega 'openai==1.51.2' a requirements.txt y redeploy."
     ) from e
 
-# En Cloud usamos st.secrets; en local, dotenv si existe
 try:
     from dotenv import dotenv_values
 except Exception:
@@ -33,16 +29,14 @@ NUMWORDS_EN = {"one": 1, "a": 1, "two": 2, "three": 3, "four": 4,
 
 
 def _get_client() -> OpenAI:
-    # Limpia posibles proxies heredados del entorno (Cloud a veces los inyecta)
+    # limpiar proxies heredados del entorno
     import os
     for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         os.environ.pop(k, None)
-
     key = st.secrets.get(
         "OPENAI_API_KEY") or dotenv_values().get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("Falta OPENAI_API_KEY en .env / secrets")
-    # Pasamos la API key explícitamente
     return OpenAI(api_key=key)
 
 
@@ -82,43 +76,132 @@ def _system_prompt(cfg: dict, menu: List[Dict], lang: str) -> str:
             f"Eres {
                 assistant_name}, un asistente de pedidos para un restaurante. Responde SIEMPRE en español.\n"
             f"Tu tono: {tone}\n\n"
-            "Objetivo: ayudar al cliente a armar su pedido basado en el menú y confirmar datos. \n"
-            "Sugiere acompañantes y bebidas. Si piden algo fuera del menú, pide elegir otra opción.\n\n"
+            "Objetivo: ayudar al cliente a armar su pedido basado en el menú y confirmar datos.\n"
+            "Si detectas petición fuera de menú o una personalización compleja no contemplada, di 'Consultando con cocina...'\n"
+            "y espera ~1 minuto la respuesta del restaurante. Si no hay respuesta, aprueba con un precio estimado similar.\n\n"
             "🍽 Menú disponible:\n" + formatted_menu + "\n\n"
             "📌 Comportamiento:\n"
             "- Cálido, claro, paso a paso. No inventes productos/ingredientes.\n"
-            "- Personalizaciones: acepta sin cebolla, salsa aparte, extra papas, etc. Ajusta precio si aplica.\n"
+            "- Personalizaciones fáciles: sin cebolla, salsa aparte, extra papas, poco picante, sin sal, con hielo, limón, ketchup/mayonesa.\n"
+            "- Otras personalizaciones → consultar con cocina.\n"
             "- Usa la FAQ interna si hay respuesta registrada.\n"
             "- Lleva un subtotal mientras propone extras.\n\n"
-            "🧾 Cuando tengas el pedido y muestres el total, DI explícitamente:\n"
-            "  “Ahora necesito unos datos para completar tu pedido…” y luego pregunta UNO A UNO:\n"
-            "  1) nombre  2) teléfono  3) pickup o delivery  4) dirección (si delivery) o minutos de retiro (si pickup)  5) método de pago.\n"
+            "🧾 Datos: pide UNO A UNO tras el total:\n"
+            "  1) nombre  2) teléfono  3) pickup o delivery  4) dirección (si delivery)  5) método de pago.\n"
+            "Para pickup puedes pedir minutos (default 30). Para delivery NO pidas minutos.\n"
             "NO invites a confirmar hasta tener todos los datos.\n\n"
-            "✅ Cuando todo esté completo: “Pedido listo para confirmación. Por favor, presiona el botón Confirmar Pedido.”\n"
-            "🛑 Si dice “stop”, termina con amabilidad.\n"
-            "🎯 Estilo: amable, profesional, breve y guiado."
+            "✅ Al final: “Pedido listo para confirmación. Presiona el botón Confirmar Pedido.”"
         )
     else:
         return (
             f"You are {
-                assistant_name}, an order assistant for a restaurant. ALWAYS respond in English.\n"
+                assistant_name}, a restaurant ordering assistant. ALWAYS respond in Spanish.\n"
             f"Your tone: {tone}\n\n"
-            "Objective: help the customer place their order based on the menu and confirm details. \n"
-            "Suggest side dishes and drinks. If they order something off the menu, ask the restaurant if it's possible and wait for confirmation.\n\n"
+            "Goal: help the customer build their order based on the menu and confirm details.\n"
+            "If you detect an off-menu request or a complex, non-standard customization, say 'Checking with the kitchen...'\n"
+            "and wait ~1 minute for the restaurant’s response. If there’s no response, approve with a similar estimated price.\n\n"
             "🍽 Available menu:\n" + formatted_menu + "\n\n"
             "📌 Behavior:\n"
             "- Warm, clear, step by step. Do not invent products/ingredients.\n"
-            "- Customizations: accept no onions, sauce on the side, extra potatoes, etc. Adjust the price if applicable or the restaurant's option when you have to ask for confirmation.\n"
-            "- Use the internal FAQ if there is a recorded answer.\n"
-            "- Keep a subtotal while proposing extras, adjustments, and additions.\n\n"
-            "🧾 When you have the order and show the total, explicitly MENTION:\n"
-            "  'Now I need some information to complete your order, ' and then ask ONE BY ONE:\n"
-            "  1) name  2) phone number  3) pickup or delivery  4) address (if delivery) or pickup time (if pickup)  5) payment method."
-            "DO NOT ask for confirmation until you have all the information."
-            "✅ When everything is complete: 'Order ready for confirmation. Please press the Confirm Order button.'\n"
-            "🛑 If they say 'stop,' end the call politely.\n"
-            "🎯 Style: kind, professional, concise and guided."
+            "- Easy customizations: no onions, sauce on the side, extra fries, mild spice, no salt, with ice, lemon, ketchup/mayonnaise.\n"
+            "- Other customizations → check with the kitchen.\n"
+            "- Use the internal FAQ if there’s a registered answer.\n"
+            "- Keep a running subtotal while proposing add-ons.\n\n"
+            "🧾 Data: ask ONE BY ONE after showing the total:\n"
+            "  1) name  2) phone  3) pickup or delivery  4) address (if delivery)  5) payment method.\n"
+            "For pickup you can ask for minutes (default 30). For delivery DO NOT ask for minutes.\n"
+            "Do NOT invite to confirm until you have all the data.\n\n"
+            "✅ At the end: “Order ready for confirmation. Please press the Confirm button.”"
         )
+
+
+# ---------- Heurística de complejidad / fuera de menú ----------
+_EASY_INGREDIENTS = {
+    "cebolla", "salsa", "papas", "picante", "sal", "azucar", "azúcar", "hielo", "limon", "limón", "mayonesa", "ketchup"
+}
+_ACTION_TOKENS = {"quiero", "pedir", "ordena", "ordenar", "agrega", "agregar", "quitar", "sin",
+                  "con", "extra", "doble", "triple", "cambiar", "sustituir", "reducir", "añadir", "sumar"}
+
+
+def _build_aliases(menu: List[Dict]) -> Dict[str, str]:
+    """ alias simples a nombre de item (desde nombre, plurales, primera palabra de descripción y tags) """
+    variants: Dict[str, str] = {}
+
+    def add_alias(alias: str, to_name: str):
+        if not alias:
+            return
+        a = alias.strip().lower()
+        if len(a) < 3:
+            return
+        variants[a] = to_name
+        if not a.endswith("s"):
+            variants[a+"s"] = to_name
+
+    for m in (menu or []):
+        nm = (m.get("name") or "").strip()
+        if not nm:
+            continue
+        low = nm.lower()
+        variants[low] = nm
+        if not low.endswith("s"):
+            variants[low+"s"] = nm
+        if low.endswith("a"):
+            variants[low[:-1]+"as"] = nm
+        if low.endswith("o"):
+            variants[low[:-1]+"os"] = nm
+        desc = (m.get("description") or "").strip().lower()
+        if desc:
+            first_tok = re.split(r"\W+", desc)[0] if desc else ""
+            add_alias(first_tok, nm)
+        notes = (m.get("special_notes") or "")
+        if notes:
+            for tok in re.split(r"[,\|/]+", notes):
+                add_alias(tok, nm)
+    return variants
+
+
+def _should_create_pending(user_text: str, menu: List[Dict]) -> bool:
+    """
+    True si:
+      - (A) Hay intención de pedido y no se reconoce ningún item del menú → fuera de menú.
+      - (B) Se reconoce un ítem pero hay personalización no “fácil” → complejo.
+    """
+    text_low = (user_text or "").lower()
+    tokens = set(re.findall(r"[\wáéíóúñ]+", text_low))
+    has_intent = bool(_ACTION_TOKENS & tokens) or (
+        "durazno" in text_low or "almibar" in text_low or "almíbar" in text_low)
+    aliases = _build_aliases(menu)
+
+    # Detectar ítems mencionados
+    mentioned = []
+    for tok in tokens:
+        if tok in aliases:
+            mentioned.append(aliases[tok])
+        else:
+            # fuzzy muy conservador
+            cands = difflib.get_close_matches(
+                tok, list(aliases.keys()), n=1, cutoff=0.9)
+            if cands:
+                mentioned.append(aliases[cands[0]])
+
+    mentioned = list(dict.fromkeys(mentioned))  # unique, keep order
+
+    if has_intent and not mentioned:
+        # No podemos mapear nada del menú pero hay intención → fuera de menú
+        return True
+
+    # Personalizaciones complejas: presencia de acción + ingrediente no fácil
+    if mentioned:
+        # ingredientes candidatos (palabras después de 'sin|con|extra|doble|triple')
+        m = re.findall(
+            r"(?:sin|con|extra|doble|triple)\s+([\wáéíóúñ]+)", text_low)
+        for ing in m:
+            base = ing.strip().lower()
+            if base and base not in _EASY_INGREDIENTS:
+                return True
+
+    return False
+# ----------------------------------------------------------
 
 
 def client_assistant_reply(
@@ -133,20 +216,24 @@ def client_assistant_reply(
     last_user = next((m["content"] for m in reversed(
         history) if m.get("role") == "user"), "")
 
-    # FAQ primero
+    # 1) Heurística de complejidad / fuera de menú → crear pending automático
+    if last_user and _should_create_pending(last_user, menu):
+        try:
+            create_pending_question(
+                conversation_id=conversation_id, question=last_user, language=lang, ttl_seconds=60)
+        except Exception:
+            pass
+        return ("Entendido, consulto con cocina. Dame ~1 minuto y te confirmo. 🙌"
+                if lang == "es" else
+                "Got it, checking with the kitchen. Give me ~1 minute and I’ll confirm. 🙌")
+
+    # 2) FAQ primero
     if last_user:
         faq_ans = match_faq(last_user, language=lang, tenant_id=tenant_id)
         if faq_ans:
             return faq_ans
 
-    # ChatOpenAI
-    # llm = _get_client(cfg)
-    # sys = _system_prompt(cfg, menu, lang)
-    # msgs = [{"role": "system", "content": sys}] + history[-12:]
-    # res = llm.invoke(msgs)
-    # reply = (res.content or "").strip()
-
-    # OpenAI Chat completions (SDK oficial)
+    # 3) OpenAI Chat completions
     client = _get_client()
     system = _system_prompt(cfg, menu, lang)
     msgs = [{"role": "system", "content": system}] + history[-12:]
@@ -159,20 +246,6 @@ def client_assistant_reply(
         messages=msgs
     )
     reply = (resp.choices[0].message.content or "").strip()
-
-    # Si el asistente indica consulta a cocina → marcar pending
-    low = reply.lower()
-    if ("consultando con cocina" in low) or ("checking with the kitchen" in low):
-        try:
-            create_pending_question(
-                conversation_id=conversation_id,
-                question=last_user,
-                language=lang,
-                ttl_seconds=60
-            )
-        except Exception:
-            pass
-
     return reply
 
 
@@ -189,14 +262,27 @@ def _numbers_in_text(text: str, lang: str) -> Dict[str, int]:
 
 
 def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang: str | None = None) -> List[Dict]:
-    # 1) keyword + plurales; 2) difflib fuzzy (>0.86); 3) cantidades básicas
+    # 1) nombres + plurales; 2) alias por descripción/tags; 3) fuzzy; 4) cantidades
     text_low = "\n".join([m.get("content", "")
                          for m in history if m.get("role") == "user"]).lower()
     names = [m["name"] for m in (menu or []) if m.get("name")]
     price_map = {m["name"]: float(m.get("price", 0.0)) for m in (menu or [])}
+    desc_map = {m["name"]: (m.get("description") or "") for m in (menu or [])}
+    note_map = {m["name"]: (m.get("special_notes") or "")
+                for m in (menu or [])}
 
-    # Variantes simples/plurales
     variants = {}
+
+    def add_alias(alias: str, to_name: str):
+        if not alias:
+            return
+        a = alias.strip().lower()
+        if len(a) < 3:
+            return
+        variants[a] = to_name
+        if not a.endswith("s"):
+            variants[a+"s"] = to_name
+
     for nm in names:
         low = nm.lower()
         variants[low] = nm
@@ -206,8 +292,16 @@ def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang
             variants[low[:-1]+"as"] = nm
         if low.endswith("o"):
             variants[low[:-1]+"os"] = nm
+        desc = desc_map.get(nm, "")
+        if desc:
+            first_tok = re.split(r"\W+", desc.lower().strip()
+                                 )[0] if desc.strip() else ""
+            add_alias(first_tok, nm)
+        notes = note_map.get(nm, "")
+        if notes:
+            for tok in re.split(r"[,\|/]+", notes):
+                add_alias(tok, nm)
 
-    # Búsqueda por token
     from collections import defaultdict
     found = defaultdict(int)
     tokens = re.findall(r"[\wáéíóúñ]+", text_low)
@@ -215,7 +309,6 @@ def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang
         if tok in variants:
             found[variants[tok]] += 1
 
-    # Fuzzy si no hubo match exacto
     if not found:
         for tok in set(tokens):
             cands = difflib.get_close_matches(
@@ -223,7 +316,6 @@ def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang
             if cands:
                 found[variants[cands[0]]] += 1
 
-    # Cantidades antes del nombre
     num_map = _numbers_in_text(text_low, (lang or cfg.get("language", "es")))
 
     def qty_before(name_low: str) -> int:
@@ -247,18 +339,18 @@ def parse_items_from_chat(history: List[Dict], menu: List[Dict], cfg: dict, lang
 
 def ensure_all_required_present(info: Dict, lang: str) -> List[str]:
     """
-    Verifica campos obligatorios para poder confirmar el pedido.
-    - Siempre: name, phone, delivery_type, payment_method
-    - Si delivery: address
-    - Si pickup: pickup_eta_min (si falta, autocompleta 30)
+    Obligatorios:
+      - Siempre: name, phone, delivery_type, payment_method
+      - Si delivery: address
+      - Si pickup: pickup_eta_min (si falta, default=30)
     """
     req = ["name", "phone", "delivery_type", "payment_method"]
-    if info.get("delivery_type") == "delivery":
+    if (info.get("delivery_type") or "").lower() == "delivery":
         req.append("address")
     else:
         req.append("pickup_eta_min")
     missing = [k for k in req if not str(info.get(k, "")).strip()]
-    if "pickup_eta_min" in missing and info.get("delivery_type") == "pickup":
+    if "pickup_eta_min" in missing and (info.get("delivery_type") or "").lower() == "pickup":
         info["pickup_eta_min"] = 30
         try:
             missing.remove("pickup_eta_min")
@@ -267,7 +359,7 @@ def ensure_all_required_present(info: Dict, lang: str) -> List[str]:
     return missing
 
 
-# Extracción de datos del cliente desde el historial
+# Extracción de datos del cliente
 _NAME_PAT_ES = re.compile(
     r"(?i)(?:me\s+llamo|soy|mi\s+nombre\s*(?:es|:))\s*([A-Za-zÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑ\s]{1,})")
 _NAME_PAT_EN = re.compile(

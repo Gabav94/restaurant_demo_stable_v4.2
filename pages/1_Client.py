@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import streamlit as st
@@ -6,7 +5,11 @@ from uuid import uuid4
 
 from backend.utils import render_js_carousel, menu_table_component
 from backend.config import get_config
-from backend.db import fetch_menu, fetch_menu_images, create_order_from_chat_ready, has_pending_for_conversation
+from backend.db import (
+    fetch_menu, fetch_menu_images, create_order_from_chat_ready,
+    has_pending_for_conversation, fetch_unnotified_decisions,
+    mark_pending_notified
+)
 from backend.llm_chat import (
     client_assistant_reply,
     extract_client_info,
@@ -28,8 +31,9 @@ currency = cfg.get("currency", "USD")
 
 st.title(t("💬 Cliente", "💬 Client"))
 
+# Botón "Nuevo chat" sin recargar la página entera
 if st.button(t("🗑️ Nuevo chat", "🗑️ New chat"), help=t("Reinicia esta conversación.", "Reset this conversation.")):
-    for k in ["conv_id", "conv", "client_info", "order_items", "collecting_info", "last_question_field", "prompted_confirm"]:
+    for k in ["conv_id", "conv", "client_info", "order_items", "collecting_info", "last_question_field", "prompted_confirm", "asked_for_data", "last_notified_ids"]:
         if k in st.session_state:
             del st.session_state[k]
     st.rerun()
@@ -59,11 +63,38 @@ if "last_question_field" not in ss:
     ss.last_question_field = None
 if "prompted_confirm" not in ss:
     ss.prompted_confirm = False
+if "asked_for_data" not in ss:
+    ss.asked_for_data = False
+if "last_notified_ids" not in ss:
+    ss.last_notified_ids = set()
 
+# Banner de pendientes
 if has_pending_for_conversation(ss.conv_id):
-    st.warning(t("⏳ Algunas decisiones requieren confirmación del restaurante. Te avisamos enseguida.",
-               "⏳ Some decisions need restaurant confirmation. We'll update you soon."))
+    st.warning(t("⏳ Consultando con cocina… te confirmamos en ~1 minuto.",
+                 "⏳ Checking with the kitchen… we’ll confirm within ~1 minute."))
 
+# Inyectar decisiones del restaurante no notificadas
+decisions = fetch_unnotified_decisions(ss.conv_id)
+for d in decisions:
+    status = (d["status"] or "").lower()
+    msg = d.get("answer") or ""
+    if status == "approved":
+        text = t("✅ Cocina aprobó la solicitud. Procedemos.",
+                 "✅ Kitchen approved the request. Proceeding.")
+        if msg:
+            text += f" {msg}"
+    elif status == "denied":
+        text = t("❌ Cocina no aprobó la solicitud. Elige otra opción, por favor.",
+                 "❌ Kitchen did not approve. Please choose another option.")
+        if msg:
+            text += f" {msg}"
+    else:
+        text = msg or t("Actualización de cocina recibida.",
+                        "Kitchen replied.")
+    ss.conv.append({"role": "assistant", "content": text})
+    mark_pending_notified(d["id"])
+
+# UI: menú
 view = st.radio(t("Visualización del menú", "Menu view"), [
                 t("Tabla", "Table"), t("Imágenes", "Images")], horizontal=True)
 col_menu, col_chat = st.columns([1, 1])
@@ -86,17 +117,22 @@ with col_chat:
             st.chat_message("user").write(m["content"])
         else:
             st.chat_message("assistant").write(m["content"])
+
     user_text = st.chat_input(t("Escribe tu mensaje…", "Type your message…"))
     if user_text:
         ut = user_text.strip()
         ss.conv.append({"role": "user", "content": ut})
+
         reply = client_assistant_reply(
             ss.conv, menu, cfg, conversation_id=ss.conv_id)
         ss.conv.append({"role": "assistant", "content": reply})
+
+        # Extraer info y parsear items
         info = extract_client_info(ss.conv, lang)
         ss.client_info.update({k: v for k, v in info.items() if v})
         ss.order_items = parse_items_from_chat(ss.conv, menu, cfg, lang=lang)
 
+        # Heurística: ¿debemos pasar a pedir datos?
         def looks_like_total_trigger(text: str) -> bool:
             low = (text or "").lower()
             if "subtotal" in low:
@@ -105,7 +141,7 @@ with col_chat:
 
         def user_closed_intent(text: str) -> bool:
             low = (text or "").lower()
-            tokens = ["eso sería todo", "nada más", "listo", "confirmar", "confirmo",
+            tokens = ["eso sería todo", "nada más", "listo", "confirmar", "confirmo", "eso es todo",
                       "that's all", "nothing else", "done", "confirm"]
             return any(tk in low for tk in tokens)
 
@@ -113,32 +149,39 @@ with col_chat:
             ss.conv) if m["role"] == "assistant"), "")
         should_collect = ss.order_items and (
             looks_like_total_trigger(last_assistant) or user_closed_intent(ut))
-        if should_collect and not ss.collecting_info:
+
+        # Disparar bloque de datos solo una vez
+        if should_collect and not ss.asked_for_data:
             pre = ("Ahora necesito unos datos para completar tu pedido. Te los pediré uno a uno"
                    if lang == "es" else
                    "I now need a few details to complete your order. I'll ask for them one by one")
             ss.conv.append({"role": "assistant", "content": pre})
             ss.collecting_info = True
             ss.last_question_field = None
+            ss.asked_for_data = True
 
         if ss.collecting_info:
-            from backend.llm_chat import ensure_all_required_present
             missing_seq = ensure_all_required_present(ss.client_info, lang)
 
-            def next_question(field: str, lang: str) -> str:
-                return {
+            def next_question(field: str, lang: str, info: dict) -> str:
+                prompts = {
                     "name": ("¿Cuál es tu nombre?" if lang == "es" else "What is your name?"),
                     "phone": ("¿Cuál es tu número de teléfono?" if lang == "es" else "What is your phone number?"),
                     "delivery_type": ("¿Será para recoger (pickup) o entrega a domicilio?" if lang == "es" else "Pickup or delivery?"),
                     "address": ("¿Cuál es la dirección para la entrega?" if lang == "es" else "What is the delivery address?"),
                     "pickup_eta_min": ("¿En cuántos minutos pasarías a recoger?" if lang == "es" else "In how many minutes would you pick up?"),
                     "payment_method": ("¿Cuál es tu método de pago (efectivo, tarjeta u online)?" if lang == "es" else "What is your payment method (cash, card, online)?"),
-                }[field]
+                }
+                if (info.get("delivery_type") or "").lower() == "delivery" and field == "pickup_eta_min":
+                    return ""
+                return prompts[field]
+
             if missing_seq:
                 nf = missing_seq[0]
-                ss.conv.append(
-                    {"role": "assistant", "content": next_question(nf, lang)})
-                ss.last_question_field = nf
+                q = next_question(nf, lang, ss.client_info)
+                if q:
+                    ss.conv.append({"role": "assistant", "content": q})
+                    ss.last_question_field = nf
             else:
                 ss.last_question_field = None
                 ss.collecting_info = False
@@ -148,6 +191,7 @@ with col_chat:
                            "Order ready for confirmation. Please press the **Confirm** button.")
                     ss.conv.append({"role": "assistant", "content": msg})
                     ss.prompted_confirm = True
+
         st.rerun()
 
 st.write("---")
