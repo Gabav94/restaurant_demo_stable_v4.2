@@ -33,11 +33,16 @@ NUMWORDS_EN = {"one": 1, "a": 1, "two": 2, "three": 3, "four": 4,
 
 
 def _get_client() -> OpenAI:
+    # Limpia posibles proxies heredados del entorno (Cloud a veces los inyecta)
+    import os
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        os.environ.pop(k, None)
+
     key = st.secrets.get(
         "OPENAI_API_KEY") or dotenv_values().get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("Falta OPENAI_API_KEY en .env / secrets")
-    # Pasamos la API key explícitamente (evita relies solo en env var)
+    # Pasamos la API key explícitamente
     return OpenAI(api_key=key)
 
 
@@ -140,7 +145,7 @@ def client_assistant_reply(
     # msgs = [{"role": "system", "content": sys}] + history[-12:]
     # res = llm.invoke(msgs)
     # reply = (res.content or "").strip()
-    
+
     # OpenAI Chat completions (SDK oficial)
     client = _get_client()
     system = _system_prompt(cfg, menu, lang)
